@@ -32,6 +32,7 @@ pub struct Job {
     pub group: Group,
     pub workers: u32,
     pub started: Instant,
+    pub stamps: Vec<crate::plan::Stamp>,
     target: u32,
     child: Child,
     pgid: i32,
@@ -69,10 +70,12 @@ impl Job {
             .spawn(move || drain_output(reader, app))
             .context("starting the output reader")?;
         let replay_cache = group.replay_cache_base(uuid);
+        let stamps = group.stamps();
         let mut job = Self {
             group: group.clone(),
             workers: options.workers,
             started: Instant::now(),
+            stamps,
             target: u32::MAX,
             pgid: child.id() as i32,
             child,

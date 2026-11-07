@@ -323,7 +323,7 @@ impl Daemon {
         let progress = job.progress();
         self.merge(&group);
         if status.success() {
-            self.records.finished(&group, uuid, now_s);
+            self.records.finished(&group, uuid, now_s, job.stamps.clone());
             if let Ok(pending) = group.pending(uuid) {
                 self.records.store_pending(&group, uuid, pending);
             }
@@ -496,7 +496,8 @@ impl Daemon {
                 },
             };
             if pending.pending == 0 {
-                self.records.finished(&group, uuid, now_s);
+                let stamps = group.stamps();
+                self.records.finished(&group, uuid, now_s, stamps);
                 self.save_records();
                 continue;
             }
@@ -644,7 +645,7 @@ pub fn offline_status(config: &Config, dirs: &Dirs, scan: bool) -> Result<Status
             let pending = group.pending(&uuid).with_context(|| format!("reading {}", group.dir.display()))?;
             records.store_pending(group, &uuid, pending);
             if pending.pending == 0 {
-                records.finished(group, &uuid, now_s);
+                records.finished(group, &uuid, now_s, group.stamps());
             }
         }
         state::write_json(&dirs.records(), &records)?;

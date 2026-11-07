@@ -97,10 +97,12 @@ impl Records {
         self.groups.get(&group.dir).is_some_and(|r| r.retry_after > now)
     }
 
-    pub fn finished(&mut self, group: &Group, uuid: &str, now: u64) {
+    /// Marks the group done for the databases as they were (`stamps`) when the replay
+    /// started, so a database Steam rewrote during the replay is replayed again.
+    pub fn finished(&mut self, group: &Group, uuid: &str, now: u64, stamps: Vec<Stamp>) {
         let record = self.groups.entry(group.dir.clone()).or_default();
         record.uuid = uuid.to_string();
-        record.stamps = group.stamps();
+        record.stamps = stamps;
         record.finished = Some(now);
         record.failures = 0;
         record.retry_after = 0;
@@ -245,8 +247,16 @@ mod tests {
         let group = group(&tmp.path().join("g"));
         let mut records = Records::default();
         assert!(!records.done(&group, "uuid-a"));
-        records.finished(&group, "uuid-a", 100);
+        records.finished(&group, "uuid-a", 100, group.stamps());
         assert!(records.done(&group, "uuid-a"));
+        let before = group.stamps();
+        write_archive(&group.databases[0], &[(6, 1, b""), (6, 3, b"")]);
+        records.finished(&group, "uuid-a", 100, before);
+        assert!(
+            !records.done(&group, "uuid-a"),
+            "a database rewritten during the replay must be replayed again"
+        );
+        records.finished(&group, "uuid-a", 100, group.stamps());
         assert!(!records.done(&group, "uuid-b"));
         write_archive(&group.databases[0], &[(6, 1, b""), (6, 2, b"")]);
         assert!(!records.done(&group, "uuid-a"));
@@ -265,7 +275,7 @@ mod tests {
             records.failed(&group, 0);
         }
         assert_eq!(records.groups[&group.dir].retry_after, 86_400);
-        records.finished(&group, "u", 5);
+        records.finished(&group, "u", 5, group.stamps());
         assert!(!records.backing_off(&group, 0));
     }
 
