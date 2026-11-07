@@ -21,6 +21,8 @@ const RETRY_GPU_EVERY: Duration = Duration::from_secs(30);
 const SHRINK_AFTER: Duration = Duration::from_secs(2 * 60);
 const SCAN_BUDGET: Duration = Duration::from_secs(5);
 const FREEZE_GRACE: Duration = Duration::from_secs(20);
+const GROW_AFTER: Duration = Duration::from_secs(20);
+const START_RETRY: Duration = Duration::from_secs(60);
 
 /// Everything the policy looks at to decide how hard to work.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -89,6 +91,8 @@ pub struct Daemon {
     probed_at: Option<Instant>,
     job: Option<Job>,
     shrink_since: Option<Instant>,
+    grow_since: Option<Instant>,
+    start_blocked_until: Option<Instant>,
     frozen_since: Option<Instant>,
     paused_until: Option<u64>,
     snapshot: Snapshot,
@@ -127,6 +131,8 @@ impl Daemon {
             probed_at: None,
             job: None,
             shrink_since: None,
+            grow_since: None,
+            start_blocked_until: None,
             frozen_since: None,
             paused_until: None,
             snapshot: Snapshot::default(),
@@ -398,16 +404,25 @@ impl Daemon {
             self.save_records();
         }
         self.shrink_since = None;
+        self.grow_since = None;
         self.frozen_since = None;
     }
 
     fn steer(&mut self, workers: u32, device: &Device, now_s: u64) -> Result<()> {
         if let Some(job) = self.job.as_mut() {
             if workers > job.workers {
-                let group = job.group.clone();
-                self.stop_job("more workers");
-                return self.start(&group, workers, device);
+                job.set_target(job.workers)?;
+                self.shrink_since = None;
+                let since = *self.grow_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= GROW_AFTER {
+                    let group = job.group.clone();
+                    self.stop_job("more workers");
+                    return self.start(&group, workers, device);
+                }
+                self.activity = "baking".into();
+                return Ok(());
             }
+            self.grow_since = None;
             job.set_target(workers)?;
             if workers == job.workers {
                 self.shrink_since = None;
@@ -415,7 +430,12 @@ impl Daemon {
                 let since = *self.shrink_since.get_or_insert_with(Instant::now);
                 if since.elapsed() >= SHRINK_AFTER {
                     let group = job.group.clone();
-                    self.stop_job("fewer workers");
+                    let reason = if workers == 0 {
+                        self.reason.clone()
+                    } else {
+                        "fewer workers".to_string()
+                    };
+                    self.stop_job(&reason);
                     if workers > 0 {
                         return self.start(&group, workers, device);
                     }
@@ -428,12 +448,20 @@ impl Daemon {
             self.activity = "waiting".into();
             return Ok(());
         }
+        if self.start_blocked_until.is_some_and(|until| Instant::now() < until) {
+            self.activity = "waiting".into();
+            self.reason = "fossilize_replay could not start; retrying shortly".into();
+            return Ok(());
+        }
         match self.next_group(&device.uuid, now_s)? {
             Some(group) => {
                 if let Err(err) = self.start(&group, workers, device) {
-                    let delay = self.records.failed(&group, now_s);
-                    self.save_records();
-                    tracing::warn!(app = group.app, "could not start the replay: {err:#}; retrying in {delay} s");
+                    self.start_blocked_until = Some(Instant::now() + START_RETRY);
+                    tracing::warn!(
+                        app = group.app,
+                        "could not start the replay: {err:#}; retrying in {} s",
+                        START_RETRY.as_secs()
+                    );
                 }
                 Ok(())
             }
