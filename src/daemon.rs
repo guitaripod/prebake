@@ -138,14 +138,30 @@ impl Daemon {
     }
 
     /// Runs until `stop` is set, or in once mode until the requested games are baked.
+    /// Runs until `stop` is set, or in once mode until the requested games are baked. In
+    /// once mode an error ends the run instead of being retried.
     pub fn run(&mut self, stop: &AtomicBool) -> Result<()> {
+        let once = matches!(self.mode, Mode::Once { .. });
+        let mut announced = (String::new(), String::new());
         while !stop.load(Ordering::Relaxed) {
-            if let Err(err) = self.tick() {
-                tracing::error!("{err:#}");
-                self.last_error = Some(format!("{err:#}"));
+            match self.tick() {
+                Ok(()) => self.last_error = None,
+                Err(err) if once => {
+                    self.shutdown();
+                    return Err(err);
+                }
+                Err(err) => {
+                    tracing::error!("{err:#}");
+                    self.last_error = Some(format!("{err:#}"));
+                }
             }
             self.write_status();
-            if matches!(self.mode, Mode::Once { .. }) && self.job.is_none() && self.activity == "done" {
+            let now_doing = (self.activity.clone(), self.reason.clone());
+            if now_doing != announced {
+                tracing::info!(activity = %now_doing.0, reason = %now_doing.1, "now");
+                announced = now_doing;
+            }
+            if once && self.job.is_none() && self.activity == "done" {
                 break;
             }
             sleep_unless(stop, TICK);
