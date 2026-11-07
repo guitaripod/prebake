@@ -98,7 +98,7 @@ Logs: `journalctl --user -u prebake`. `PREBAKE_LOG=debug` adds per-pipeline cras
 idle_after = "5m"          # no input for this long counts as away
 workers_away = 0           # 0 = one per CPU thread minus one, within memory
 workers_present = 0        # 0 = wait until you leave
-respect_inhibitors = true  # apps that keep the screen awake (video, calls) count as you being present
+respect_inhibitors = false # true: apps that keep the screen awake (music, video, calls) count as you being present
 run_on_battery = false
 pipeline_timeout = 60      # seconds one pipeline may take before Fossilize skips it
 exclude = []               # Steam app ids to leave alone

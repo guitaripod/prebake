@@ -14,8 +14,11 @@ pub struct Config {
     pub workers_away: u32,
     /// Replay workers while you are at the computer. 0 pauses until you leave.
     pub workers_present: u32,
-    /// Count apps that block the screensaver (video players, browsers playing media) as you
-    /// being present.
+    /// Count apps that keep the screen awake (a browser playing music or video, a call) as you
+    /// being present. Off by default: away means no keyboard or mouse input, and a tab left
+    /// playing would otherwise hold baking off for hours. Needs a compositor with
+    /// ext-idle-notify-v1 version 2 (KDE Plasma 6.7+, sway 1.11+, Hyprland, niri, COSMIC);
+    /// older ones always respect inhibitors.
     pub respect_inhibitors: bool,
     /// Keep baking on battery power.
     pub run_on_battery: bool,
@@ -35,7 +38,7 @@ impl Default for Config {
             idle_after: Duration::from_secs(5 * 60),
             workers_away: 0,
             workers_present: 0,
-            respect_inhibitors: true,
+            respect_inhibitors: false,
             run_on_battery: false,
             steam_root: None,
             device_index: None,
@@ -122,8 +125,8 @@ workers_away = 0
 # Replay workers while you are at the computer. 0 = wait until you leave.
 workers_present = 0
 
-# Treat apps that keep the screen awake (video, calls) as you being present.
-respect_inhibitors = true
+# Treat apps that keep the screen awake (music or video in a browser, calls) as you being present.
+respect_inhibitors = false
 
 # Keep baking on battery power.
 run_on_battery = false

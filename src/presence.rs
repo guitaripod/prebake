@@ -126,10 +126,10 @@ fn run_wayland(presence: &Arc<Presence>, timeout_ms: u32, respect_inhibitors: bo
         notifier.get_idle_notification(timeout_ms, &seat, &qh, ())
     };
     presence.idle.store(false, Ordering::Relaxed);
-    presence.set_source(if respect_inhibitors || notifier.version() < 2 {
-        "Wayland ext-idle-notify"
+    presence.set_source(if !respect_inhibitors && notifier.version() >= 2 {
+        "Wayland ext-idle-notify, input only"
     } else {
-        "Wayland ext-idle-notify (input only)"
+        "Wayland ext-idle-notify, screen-awake apps count as present"
     });
     let mut state = WaylandState {
         presence: Arc::clone(presence),
