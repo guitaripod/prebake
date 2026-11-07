@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 const TICK: Duration = Duration::from_secs(2);
 const REPLAN_EVERY: Duration = Duration::from_secs(15 * 60);
 const REPROBE_GPU_EVERY: Duration = Duration::from_secs(60 * 60);
+const RETRY_GPU_EVERY: Duration = Duration::from_secs(30);
 const SHRINK_AFTER: Duration = Duration::from_secs(2 * 60);
 const SCAN_BUDGET: Duration = Duration::from_secs(5);
 const FREEZE_GRACE: Duration = Duration::from_secs(20);
@@ -273,7 +274,12 @@ impl Daemon {
     }
 
     fn refresh_device(&mut self) -> Result<()> {
-        if self.probed_at.is_some_and(|t| t.elapsed() < REPROBE_GPU_EVERY) {
+        let every = if self.device.is_some() {
+            REPROBE_GPU_EVERY
+        } else {
+            RETRY_GPU_EVERY
+        };
+        if self.probed_at.is_some_and(|t| t.elapsed() < every) {
             return Ok(());
         }
         if self.device.is_some() && (self.job.is_some() || !self.snapshot.games.is_empty()) {
@@ -423,7 +429,14 @@ impl Daemon {
             return Ok(());
         }
         match self.next_group(&device.uuid, now_s)? {
-            Some(group) => self.start(&group, workers, device),
+            Some(group) => {
+                if let Err(err) = self.start(&group, workers, device) {
+                    let delay = self.records.failed(&group, now_s);
+                    self.save_records();
+                    tracing::warn!(app = group.app, "could not start the replay: {err:#}; retrying in {delay} s");
+                }
+                Ok(())
+            }
             None => {
                 self.activity = if self.scanning_left(&device.uuid, now_s) {
                     "scanning"
@@ -509,6 +522,7 @@ impl Daemon {
     fn scanning_left(&self, uuid: &str, now_s: u64) -> bool {
         self.plans
             .iter()
+            .filter(|p| !self.steam_busy_with(p.app.id))
             .flat_map(|p| p.groups.iter())
             .any(|g| !self.deferred.contains(&g.dir) && !self.records.done(g, uuid) && !self.records.backing_off(g, now_s))
     }
