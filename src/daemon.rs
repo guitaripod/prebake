@@ -257,7 +257,7 @@ impl Daemon {
         if self.probed_at.is_some_and(|t| t.elapsed() < REPROBE_GPU_EVERY) {
             return Ok(());
         }
-        if self.job.is_some() && self.device.is_some() {
+        if self.device.is_some() && (self.job.is_some() || !self.snapshot.games.is_empty()) {
             return Ok(());
         }
         self.probed_at = Some(Instant::now());
@@ -463,11 +463,18 @@ impl Daemon {
             }
             let pending = match self.records.cached_pending(&group, uuid) {
                 Some(pending) => pending,
-                None => {
-                    let pending = group.pending(uuid).with_context(|| format!("reading {}", group.dir.display()))?;
-                    self.records.store_pending(&group, uuid, pending);
-                    pending
-                }
+                None => match group.pending(uuid) {
+                    Ok(pending) => {
+                        self.records.store_pending(&group, uuid, pending);
+                        pending
+                    }
+                    Err(err) => {
+                        let delay = self.records.failed(&group, now_s);
+                        tracing::warn!(app = group.app, "reading {}: {err:#}; retrying in {delay} s", group.dir.display());
+                        self.save_records();
+                        continue;
+                    }
+                },
             };
             if pending.pending == 0 {
                 self.records.finished(&group, uuid, now_s);

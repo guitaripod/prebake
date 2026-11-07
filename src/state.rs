@@ -9,11 +9,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Where prebake keeps its config and state.
+/// Where prebake keeps its config and state. The live status goes to the runtime
+/// directory (memory-backed), since the service rewrites it every few seconds.
 #[derive(Debug, Clone)]
 pub struct Dirs {
     pub config: PathBuf,
     pub state: PathBuf,
+    pub runtime: PathBuf,
 }
 
 impl Dirs {
@@ -22,9 +24,12 @@ impl Dirs {
         let state = base
             .state_dir()
             .map_or_else(|| base.home_dir().join(".local/state"), Path::to_path_buf);
+        let state = state.join("prebake");
+        let runtime = std::env::var_os("XDG_RUNTIME_DIR").map_or_else(|| state.clone(), |dir| PathBuf::from(dir).join("prebake"));
         Ok(Self {
             config: base.config_dir().join("prebake/config.toml"),
-            state: state.join("prebake"),
+            state,
+            runtime,
         })
     }
 
@@ -33,7 +38,7 @@ impl Dirs {
     }
 
     pub fn status(&self) -> PathBuf {
-        self.state.join("status.json")
+        self.runtime.join("status.json")
     }
 
     pub fn control(&self) -> PathBuf {
