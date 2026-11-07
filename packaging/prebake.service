@@ -1,0 +1,16 @@
+[Unit]
+Description=prebake: bake Steam's Vulkan shader caches while you are away
+Documentation=https://github.com/guitaripod/prebake
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/prebake daemon
+Restart=on-failure
+RestartSec=30
+KillMode=mixed
+TimeoutStopSec=20
+
+[Install]
+WantedBy=graphical-session.target
