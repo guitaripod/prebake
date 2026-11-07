@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Read, Write};
@@ -133,24 +133,18 @@ pub fn merge_fragments(base: &Path) -> Result<Option<usize>> {
         return Ok(None);
     }
     let tmp = base.with_extension("foz.prebake-tmp");
-    let mut seen = HashSet::new();
-    let mut count = 0usize;
-    {
-        let out = File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
-        let mut writer = BufWriter::with_capacity(1 << 16, out);
-        writer.write_all(&MAGIC)?;
-        writer.write_all(&[0, 0, 0, VERSION])?;
-        let mut sources = Vec::with_capacity(parts.len() + 1);
-        if base.exists() {
-            sources.push(base.to_path_buf());
-        }
-        sources.extend(parts.iter().cloned());
-        for source in &sources {
-            count += copy_unique_entries(source, &mut seen, &mut writer)?;
-        }
-        let file = writer.into_inner().map_err(|err| err.into_error())?;
-        file.sync_all()?;
+    let mut sources = Vec::with_capacity(parts.len() + 1);
+    if base.exists() {
+        sources.push(base.to_path_buf());
     }
+    sources.extend(parts.iter().cloned());
+    let count = match write_merged(&tmp, &sources) {
+        Ok(count) => count,
+        Err(err) => {
+            let _ = fs::remove_file(&tmp);
+            return Err(err);
+        }
+    };
     fs::rename(&tmp, base).with_context(|| format!("replacing {}", base.display()))?;
     for part in parts {
         fs::remove_file(&part).with_context(|| format!("removing {}", part.display()))?;
@@ -158,10 +152,34 @@ pub fn merge_fragments(base: &Path) -> Result<Option<usize>> {
     Ok(Some(count))
 }
 
+/// Writes the unique entries of `sources` to `tmp` and syncs it. Fails without touching
+/// anything else when any source cannot be read or has a format it does not know.
+fn write_merged(tmp: &Path, sources: &[PathBuf]) -> Result<usize> {
+    let out = File::create(tmp).with_context(|| format!("creating {}", tmp.display()))?;
+    let mut writer = BufWriter::with_capacity(1 << 16, out);
+    writer.write_all(&MAGIC)?;
+    writer.write_all(&[0, 0, 0, VERSION])?;
+    let mut seen = HashSet::new();
+    let mut count = 0;
+    for source in sources {
+        count += copy_unique_entries(source, &mut seen, &mut writer)?;
+    }
+    let file = writer.into_inner().map_err(|err| err.into_error())?;
+    file.sync_all()?;
+    Ok(count)
+}
+
 fn copy_unique_entries(path: &Path, seen: &mut HashSet<[u8; NAME_LEN]>, writer: &mut impl Write) -> Result<usize> {
     let data = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    if data.len() < HEADER_LEN as usize || data[..12] != MAGIC || !(MIN_VERSION..=VERSION).contains(&data[15]) {
+    if data.len() < HEADER_LEN as usize {
         return Ok(0);
+    }
+    if data[..12] != MAGIC || !(MIN_VERSION..=VERSION).contains(&data[15]) {
+        bail!(
+            "{} is not a Fossilize archive this version understands (format {})",
+            path.display(),
+            data[15]
+        );
     }
     let mut offset = HEADER_LEN as usize;
     let mut copied = 0;
@@ -303,6 +321,23 @@ mod tests {
         assert_eq!(merge_fragments(&base).unwrap(), Some(1));
         assert_eq!(keys_of(&base), vec![Key { tag: 4, hash: 7 }]);
         assert_eq!(keys_with_fragments(&base).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn refuses_to_merge_an_archive_of_an_unknown_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("replay_cache.u.foz");
+        write_archive(&base, &[(6, 1, b"")]);
+        let fragment = dir.path().join("replay_cache.u.1.foz");
+        write_archive(&fragment, &[(6, 2, b"")]);
+        let mut data = fs::read(&fragment).unwrap();
+        data[15] = 7;
+        fs::write(&fragment, &data).unwrap();
+        let before = fs::read(&base).unwrap();
+        assert!(merge_fragments(&base).is_err());
+        assert_eq!(fs::read(&base).unwrap(), before);
+        assert!(fragment.exists());
+        assert!(!dir.path().join("replay_cache.u.foz.prebake-tmp").exists());
     }
 
     #[test]
