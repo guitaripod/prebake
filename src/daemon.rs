@@ -422,6 +422,7 @@ impl Daemon {
             bail!("no plan for app {}", group.app);
         };
         let env = plan::replay_env(&app_plan.cache_dir, &app_plan.buckets, &self.steam);
+        plan::prepare_cache_dirs(&app_plan.cache_dir).with_context(|| format!("preparing {}", app_plan.cache_dir.display()))?;
         let name = app_plan.app.name.clone();
         self.merge(group);
         let fossilize = self.steam.fossilize_replay();

@@ -327,7 +327,28 @@ mod tests {
             .map(|_| 'x')
             .collect();
         assert!(left.is_empty(), "processes left in the replay group");
-        let cache = dir.join("replay_cache.d7567106f26893a3f6c975eefa1448b9.foz");
-        assert!(!crate::foz::fragments(&cache).unwrap().is_empty(), "the replay recorded nothing");
+        let replayer_cache = dir.join("replay_cache.d7567106f26893a3f6c975eefa1448b9.foz");
+        assert!(
+            !crate::foz::fragments(&replayer_cache).unwrap().is_empty(),
+            "the replay recorded nothing"
+        );
+        let written = walk_files(cache.path());
+        assert!(
+            written.iter().any(|p| p.to_string_lossy().contains("steamapp_shader_cache")),
+            "the driver cached nothing: {written:?}"
+        );
+    }
+
+    fn walk_files(dir: &Path) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                files.extend(walk_files(&path));
+            } else {
+                files.push(path);
+            }
+        }
+        files
     }
 }

@@ -216,6 +216,16 @@ pub fn replay_env(plan_cache_dir: &Path, buckets: &[String], steam: &Steam) -> V
     env
 }
 
+/// Creates the driver cache directories Steam creates before it launches a game. The NVIDIA
+/// driver silently skips caching when `__GL_SHADER_DISK_CACHE_PATH` does not exist, so a
+/// game Steam never started on this machine would otherwise be replayed for nothing.
+pub fn prepare_cache_dirs(cache_dir: &Path) -> std::io::Result<()> {
+    for name in ["nvidiav1", "AMDv1"] {
+        fs::create_dir_all(cache_dir.join(name))?;
+    }
+    Ok(())
+}
+
 /// Variables that would stop the driver from writing a cache or inject extra layers.
 pub const SCRUBBED_ENV: &[&str] = &[
     "MESA_SHADER_CACHE_DISABLE",
@@ -258,6 +268,16 @@ mod tests {
         assert_eq!(groups[1].bucket.as_deref(), Some("3554f158047e28bf"));
         assert_eq!(groups[1].databases, vec![current.join(LOCAL_DB), current.join(SWARM_DB)]);
         assert!(groups[1].implicit_whitelist());
+    }
+
+    #[test]
+    fn prepares_the_driver_cache_directories_steam_would_create() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("shadercache/287390");
+        prepare_cache_dirs(&cache).unwrap();
+        assert!(cache.join("nvidiav1").is_dir());
+        assert!(cache.join("AMDv1").is_dir());
+        prepare_cache_dirs(&cache).unwrap();
     }
 
     #[test]
