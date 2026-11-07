@@ -80,10 +80,10 @@ fn watch_idle(presence: Arc<Presence>, idle_after: Duration, respect_inhibitors:
                 }
             }
         }
-        if poll_idle(&presence, idle_after, "GNOME IdleMonitor", mutter_idle_ms).is_some() {
+        if poll_idle(&presence, idle_after, respect_inhibitors, "GNOME IdleMonitor", mutter_idle_ms).is_some() {
             continue;
         }
-        if std::env::var_os("DISPLAY").is_some() && poll_idle(&presence, idle_after, "X11 screensaver", x11_idle_ms).is_some() {
+        if x11_session() && poll_idle(&presence, idle_after, respect_inhibitors, "X11 screensaver", x11_idle_ms).is_some() {
             continue;
         }
         presence.idle.store(false, Ordering::Relaxed);
@@ -94,15 +94,58 @@ fn watch_idle(presence: Arc<Presence>, idle_after: Duration, respect_inhibitors:
 
 /// Polls an idle-time source until it stops answering. Returns `None` when it never
 /// answered at all, so the caller can try the next source.
-fn poll_idle(presence: &Presence, idle_after: Duration, name: &str, read: fn() -> Result<u64>) -> Option<()> {
+fn poll_idle(presence: &Presence, idle_after: Duration, respect_inhibitors: bool, name: &str, read: fn() -> Result<u64>) -> Option<()> {
     read().ok()?;
     presence.set_source(name);
     while let Ok(ms) = read() {
-        presence.idle.store(Duration::from_millis(ms) >= idle_after, Ordering::Relaxed);
+        let idle = Duration::from_millis(ms) >= idle_after && !(respect_inhibitors && session_inhibited());
+        presence.idle.store(idle, Ordering::Relaxed);
         std::thread::sleep(POLL);
     }
     presence.idle.store(false, Ordering::Relaxed);
     Some(())
+}
+
+/// An X11 session, not XWayland inside a Wayland one: XWayland only sees input aimed at X11
+/// windows, so its idle time grows while you type into native Wayland apps.
+fn x11_session() -> bool {
+    std::env::var_os("DISPLAY").is_some() && std::env::var_os("WAYLAND_DISPLAY").is_none()
+}
+
+/// True when an app asked the session not to go idle (GNOME's session manager, or the
+/// freedesktop power-management inhibit interface elsewhere).
+fn session_inhibited() -> bool {
+    const IDLE: u32 = 8;
+    zbus::block_on(async {
+        let Ok(conn) = session_bus().await else { return false };
+        if let Ok(reply) = conn
+            .call_method(
+                Some("org.gnome.SessionManager"),
+                "/org/gnome/SessionManager",
+                Some("org.gnome.SessionManager"),
+                "IsInhibited",
+                &(IDLE,),
+            )
+            .await
+            && let Ok(inhibited) = reply.body().deserialize::<bool>()
+        {
+            return inhibited;
+        }
+        if let Ok(reply) = conn
+            .call_method(
+                Some("org.freedesktop.PowerManagement"),
+                "/org/freedesktop/PowerManagement/Inhibit",
+                Some("org.freedesktop.PowerManagement.Inhibit"),
+                "HasInhibit",
+                &(),
+            )
+            .await
+            && let Ok(inhibited) = reply.body().deserialize::<bool>()
+        {
+            return inhibited;
+        }
+        false
+    })
 }
 
 enum WaylandError {
@@ -190,7 +233,7 @@ pub fn probe_idle_source() -> Option<&'static str> {
     if mutter_idle_ms().is_ok() {
         return Some("GNOME IdleMonitor");
     }
-    if std::env::var_os("DISPLAY").is_some() && x11_idle_ms().is_ok() {
+    if x11_session() && x11_idle_ms().is_ok() {
         return Some("X11 screensaver");
     }
     None
@@ -227,11 +270,45 @@ fn x11_idle_ms() -> Result<u64> {
 }
 
 fn watch_session(presence: &Presence) {
+    let mut bus_was_up = true;
     loop {
-        presence.locked.store(screen_locked().unwrap_or(false), Ordering::Relaxed);
-        presence.games.store(gamemode_clients().unwrap_or(0), Ordering::Relaxed);
+        let bus_up = bus_alive();
+        if bus_up != bus_was_up {
+            if bus_up {
+                tracing::info!("session bus is back");
+            } else {
+                tracing::warn!("session bus unreachable; screen lock and GameMode are unknown until it returns");
+            }
+            bus_was_up = bus_up;
+        }
+        presence.locked.store(bus_up && screen_locked().unwrap_or(false), Ordering::Relaxed);
+        presence
+            .games
+            .store(if bus_up { gamemode_clients().unwrap_or(0) } else { 0 }, Ordering::Relaxed);
         std::thread::sleep(POLL);
     }
+}
+
+/// Pings the bus daemon and drops the cached connection when it does not answer, so the
+/// next call reconnects after a session bus restart.
+fn bus_alive() -> bool {
+    let alive = zbus::block_on(async {
+        let conn = session_bus().await?;
+        conn.call_method(
+            Some("org.freedesktop.DBus"),
+            "/org/freedesktop/DBus",
+            Some("org.freedesktop.DBus"),
+            "GetId",
+            &(),
+        )
+        .await?;
+        anyhow::Ok(())
+    })
+    .is_ok();
+    if !alive {
+        *BUS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+    alive
 }
 
 fn screen_locked() -> Result<bool> {
@@ -269,13 +346,16 @@ fn gamemode_clients() -> Result<u32> {
     })
 }
 
+static BUS: Mutex<Option<zbus::Connection>> = Mutex::new(None);
+
 async fn session_bus() -> Result<zbus::Connection> {
-    static BUS: std::sync::OnceLock<zbus::Connection> = std::sync::OnceLock::new();
-    if let Some(conn) = BUS.get() {
-        return Ok(conn.clone());
+    let cached = BUS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some(conn) = cached.filter(|c| !c.is_closed()) {
+        return Ok(conn);
     }
     let conn = zbus::Connection::session().await.context("connecting to the session bus")?;
-    Ok(BUS.get_or_init(|| conn).clone())
+    *BUS.lock().unwrap_or_else(|e| e.into_inner()) = Some(conn.clone());
+    Ok(conn)
 }
 
 /// True when the machine runs on battery: a battery is present and no mains supply is online.
