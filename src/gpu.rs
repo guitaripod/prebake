@@ -3,7 +3,8 @@
 use anyhow::{Context, Result, bail};
 use ash::vk;
 use serde::{Deserialize, Serialize};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 /// A Vulkan device as `fossilize_replay --device-index` sees it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,17 +22,32 @@ pub struct Device {
 /// loaded into the long-running daemon.
 pub fn probe_in_child() -> Result<Vec<Device>> {
     let exe = std::env::current_exe().context("locating the prebake executable")?;
-    let output = Command::new(exe)
+    let mut child = Command::new(exe)
         .args(["gpu", "--json"])
         .env("VK_LOADER_LAYERS_DISABLE", "~implicit~")
         .env("DISABLE_MANGOHUD", "1")
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .context("running prebake gpu")?;
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    while child.try_wait()?.is_none() {
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("the Vulkan driver did not answer within {} s", PROBE_TIMEOUT.as_secs());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let output = child.wait_with_output()?;
     if !output.status.success() {
         bail!("prebake gpu failed: {}", String::from_utf8_lossy(&output.stderr).trim());
     }
     serde_json::from_slice(&output.stdout).context("reading prebake gpu output")
 }
+
+const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Picks the device to replay on: the configured index, else the first discrete GPU,
 /// else the first device.
