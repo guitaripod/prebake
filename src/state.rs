@@ -177,6 +177,7 @@ pub struct Status {
     pub steam_background_processing: bool,
     pub job: Option<JobStatus>,
     pub apps: Vec<AppStatus>,
+    pub paused_until: Option<u64>,
     pub last_error: Option<String>,
 }
 

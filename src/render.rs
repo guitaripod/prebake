@@ -1,5 +1,6 @@
 use crate::state::{AppState, AppStatus, Status};
 use std::fmt::Write;
+use std::time::Duration;
 
 /// Formats the status for a terminal. Ready games are summarised unless `all` is set.
 pub fn status(status: &Status, live: bool, all: bool) -> String {
@@ -57,7 +58,9 @@ fn headline(status: &Status, live: bool) -> String {
     if !live {
         return "prebake is not running (start it with: prebake install)".into();
     }
+    let count = |state: AppState| status.apps.iter().filter(|a| a.state == state).count();
     match &status.job {
+        Some(job) if job.running == 0 => format!("Holding {}: workers paused ({})", job.name, status.reason),
         Some(job) => {
             let p = job.progress;
             let percent = (p.done * 100).checked_div(p.total).unwrap_or(0);
@@ -74,8 +77,19 @@ fn headline(status: &Status, live: bool) -> String {
             )
         }
         None => match status.activity.as_str() {
-            "done" => "Everything is baked; watching for new shaders".into(),
-            "paused" => format!("Paused ({})", status.reason),
+            "done" if count(AppState::Failed) + count(AppState::Steam) == 0 => "Everything is baked; watching for new shaders".into(),
+            "done" => format!(
+                "Nothing more to bake now: {} with Steam, {} failed and retried later",
+                count(AppState::Steam),
+                count(AppState::Failed)
+            ),
+            "paused" => match status.paused_until {
+                Some(until) => format!(
+                    "Paused for {} more (prebake resume to continue)",
+                    humantime::format_duration(Duration::from_secs(until.saturating_sub(status.updated) / 60 * 60))
+                ),
+                None => "Paused".into(),
+            },
             "scanning" => "Checking shader caches".into(),
             other => format!("{} ({})", capitalize(other), status.reason),
         },
@@ -167,5 +181,22 @@ mod tests {
         assert!(text.contains("unscanned"));
         assert!(!text.contains("Cyberpunk"));
         assert!(super::status(&status, true, true).contains("Cyberpunk"));
+
+        let mut held = status.clone();
+        held.job.as_mut().unwrap().running = 0;
+        held.reason = "a game is running".into();
+        assert!(super::status(&held, true, false).starts_with("Holding God of War Ragnarök: workers paused (a game is running)"));
+
+        let mut paused = status.clone();
+        paused.job = None;
+        paused.activity = "paused".into();
+        paused.updated = 1000;
+        paused.paused_until = Some(1000 + 3600 + 59);
+        assert!(super::status(&paused, true, false).starts_with("Paused for 1h more"));
+
+        let mut finished = paused;
+        finished.activity = "done".into();
+        finished.apps[0].state = AppState::Failed;
+        assert!(super::status(&finished, true, false).starts_with("Nothing more to bake now: 0 with Steam, 1 failed"));
     }
 }

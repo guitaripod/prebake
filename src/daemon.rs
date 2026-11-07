@@ -89,6 +89,7 @@ pub struct Daemon {
     job: Option<Job>,
     shrink_since: Option<Instant>,
     frozen_since: Option<Instant>,
+    paused_until: Option<u64>,
     snapshot: Snapshot,
     steam_background: bool,
     activity: String,
@@ -126,6 +127,7 @@ impl Daemon {
             job: None,
             shrink_since: None,
             frozen_since: None,
+            paused_until: None,
             snapshot: Snapshot::default(),
             steam_background: false,
             activity: "starting".into(),
@@ -181,8 +183,9 @@ impl Daemon {
         self.yield_to_steam();
 
         let control: Control = state::read_json(&self.dirs.control());
+        self.paused_until = control.paused_until.filter(|_| control.paused(now_s));
         let inputs = Inputs {
-            paused: control.paused(now_s),
+            paused: control.paused(now_s) && matches!(self.mode, Mode::Service),
             boosted: control.boosted(now_s) || matches!(self.mode, Mode::Once { .. }),
             game_running: !self.snapshot.games.is_empty() || self.presence.gamemode_games() > 0,
             on_battery: presence::on_battery(),
@@ -565,6 +568,7 @@ impl Daemon {
             steam_background_processing: self.steam_background,
             job,
             apps,
+            paused_until: self.paused_until,
             last_error: self.last_error.clone(),
         }
     }
