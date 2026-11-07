@@ -14,6 +14,10 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Tag matches Cargo.toml
+        run: |
+          version="$(cargo pkgid | sed 's/.*[#@]//')"
+          test "$version" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} but Cargo.toml says $version"; exit 1; }
       - run: cargo build --release --locked
       - name: Package
         run: |
