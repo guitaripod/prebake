@@ -18,7 +18,7 @@ pub fn status(status: &Status, live: bool, all: bool) -> String {
         if status.steam_background_processing {
             "on: Steam finishes baked games on its own"
         } else {
-            "off: Steam finishes each baked game in a few seconds at launch"
+            "off: Steam finishes each baked game in a short pass at launch"
         }
     );
     if let Some(error) = &status.last_error {

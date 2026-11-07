@@ -9,7 +9,7 @@ $ prebake status
 Baking God of War Ragnarök (2 of 2) · 27 workers (27 running) · 41% of 814,727 · you are away
 GPU       NVIDIA RTX PRO 6000 Blackwell Workstation Edition (cache key d7567106)
 Presence  away (Wayland ext-idle-notify, input only)
-Steam     background processing off: Steam finishes each baked game in a few seconds at launch
+Steam     background processing off: Steam finishes each baked game in a short pass at launch
 
 14 ready · 48 waiting · 1 baking · 0 with Steam · 0 failed
 
@@ -40,7 +40,7 @@ Idle time comes from the Wayland `ext-idle-notify-v1` protocol (KDE Plasma, Hypr
 
 Steam keeps its own list of games whose shaders changed. For a game prebake has baked, Steam's pass is quick because every pipeline is already in the replayer cache, and Steam uses it to fold the driver's per-process cache files into the file the game reads. Who runs that pass is up to Steam's "Allow background processing of Vulkan shaders" setting:
 
-- **Off** (the desktop default): Steam runs it when you press Play, so a baked game shows "Processing Vulkan shaders" for a few seconds instead of minutes.
+- **Off** (the desktop default): Steam runs it when you press Play, so a baked game still shows "Processing Vulkan shaders", but only while Steam checks what prebake already compiled (it compiles only what is new since).
 - **On**: Steam runs it in the background and baked games start straight away. prebake can turn it on for you, with a small thread budget so Steam's own share stays light:
 
   ```
