@@ -44,6 +44,24 @@ impl Dirs {
     pub fn control(&self) -> PathBuf {
         self.state.join("control.json")
     }
+
+    /// Takes the lock that lets only one daemon (the service or `prebake run`) bake at a
+    /// time. Returns `None` while another process holds it.
+    pub fn lock(&self) -> Result<Option<nix::fcntl::Flock<fs::File>>> {
+        fs::create_dir_all(&self.state).with_context(|| format!("creating {}", self.state.display()))?;
+        let path = self.state.join("daemon.lock");
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .with_context(|| format!("opening {}", path.display()))?;
+        match nix::fcntl::Flock::lock(file, nix::fcntl::FlockArg::LockExclusiveNonblock) {
+            Ok(lock) => Ok(Some(lock)),
+            Err((_, nix::errno::Errno::EWOULDBLOCK)) => Ok(None),
+            Err((_, err)) => Err(err).with_context(|| format!("locking {}", path.display())),
+        }
+    }
 }
 
 pub fn now() -> u64 {
@@ -290,6 +308,21 @@ mod tests {
         assert_eq!(records.cached_pending(&group, "v"), None);
         write_archive(&group.dir.join("replay_cache.u.1.foz"), &[(6, 1, b"")]);
         assert_eq!(records.cached_pending(&group, "u"), None);
+    }
+
+    #[test]
+    fn only_one_daemon_holds_the_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = Dirs {
+            config: tmp.path().join("config.toml"),
+            state: tmp.path().join("state"),
+            runtime: tmp.path().join("run"),
+        };
+        let first = dirs.lock().unwrap();
+        assert!(first.is_some());
+        assert!(dirs.lock().unwrap().is_none());
+        drop(first);
+        assert!(dirs.lock().unwrap().is_some());
     }
 
     #[test]

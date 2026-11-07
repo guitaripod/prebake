@@ -132,7 +132,7 @@ pub fn merge_fragments(base: &Path) -> Result<Option<usize>> {
     if parts.is_empty() {
         return Ok(None);
     }
-    let tmp = base.with_extension("foz.prebake-tmp");
+    let tmp = base.with_extension(format!("foz.prebake-{}.tmp", std::process::id()));
     let mut sources = Vec::with_capacity(parts.len() + 1);
     if base.exists() {
         sources.push(base.to_path_buf());
@@ -337,7 +337,7 @@ mod tests {
         assert!(merge_fragments(&base).is_err());
         assert_eq!(fs::read(&base).unwrap(), before);
         assert!(fragment.exists());
-        assert!(!dir.path().join("replay_cache.u.foz.prebake-tmp").exists());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2, "a temporary file was left behind");
     }
 
     #[test]

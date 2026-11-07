@@ -226,6 +226,9 @@ fn foreground(dirs: &Dirs, apps: Vec<u32>, workers: Option<u32>) -> Result<()> {
             status.pid
         );
     }
+    let Some(_lock) = dirs.lock()? else {
+        bail!("another prebake is baking (the service or a `prebake run`); use `prebake now` to make the service bake right away");
+    };
     init_logging();
     let config = load_config(dirs)?;
     let stop = stop_on_signals()?;
@@ -238,8 +241,27 @@ fn service_main(dirs: &Dirs) -> Result<()> {
     let config = load_config(dirs)?;
     let stop = stop_on_signals()?;
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "prebake service starting");
+    let Some(_lock) = wait_for_lock(dirs, &stop)? else {
+        return Ok(());
+    };
     let mut daemon = Daemon::new(config, dirs.clone(), Mode::Service)?;
     daemon.run(&stop)
+}
+
+/// Waits while a `prebake run` holds the baking lock, so the service never replays next to it.
+fn wait_for_lock(dirs: &Dirs, stop: &AtomicBool) -> Result<Option<nix::fcntl::Flock<std::fs::File>>> {
+    let mut announced = false;
+    while !stop.load(Ordering::Relaxed) {
+        if let Some(lock) = dirs.lock()? {
+            return Ok(Some(lock));
+        }
+        if !announced {
+            tracing::info!("another prebake is baking; waiting for it to finish");
+            announced = true;
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    Ok(None)
 }
 
 fn init_logging() {
