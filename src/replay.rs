@@ -159,6 +159,19 @@ impl Job {
     }
 }
 
+/// A job dropped without `stop` (a failed start, an early return) still takes its process
+/// group down and reaps the replayer, so nothing is left running or as a zombie.
+impl Drop for Job {
+    fn drop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none() {
+            self.control.take();
+            sys::kill_group(self.pgid);
+            let _ = self.child.wait();
+        }
+        self.join_reader();
+    }
+}
+
 fn arguments(group: &Group, options: &Options, control_fd: i32) -> Vec<String> {
     let mut args: Vec<String> = group.databases.iter().map(|p| p.display().to_string()).collect();
     args.extend(
