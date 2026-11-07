@@ -6,17 +6,17 @@ Steam on Linux downloads pipeline caches for your games and records new ones whi
 
 ```
 $ prebake status
-Baking God of War Ragnarök (2 of 2) · 27 workers (27 running) · 41% of 593,470 · you are away
+Baking God of War Ragnarök (2 of 2) · 27 workers (27 running) · 41% of 814,727 · you are away
 GPU       NVIDIA RTX PRO 6000 Blackwell Workstation Edition (cache key d7567106)
-Presence  away (Wayland ext-idle-notify)
-Steam     background processing on: Steam finishes baked games on its own
+Presence  away (Wayland ext-idle-notify, input only)
+Steam     background processing off: Steam finishes each baked game in a few seconds at launch
 
-14 ready · 51 waiting · 1 baking · 0 with Steam · 0 failed
+14 ready · 48 waiting · 1 baking · 0 with Steam · 0 failed
 
-Game                                State      To compile
-God of War Ragnarök                 baking        350,152
-Counter-Strike 2                    waiting       212,904
-Cyberpunk 2077                      waiting        12,191
+Game                                      State      To compile
+God of War Ragnarök                       baking        480,689
+UNCHARTED™: Legacy of Thieves Collection  waiting       201,377
+Cyberpunk 2077                            waiting        12,191
 …
 ```
 
