@@ -38,10 +38,17 @@ fn user_unit_path() -> Result<PathBuf> {
     Ok(base.config_dir().join("systemd/user").join(UNIT))
 }
 
-/// Writes the user unit (unless a packaged one exists) and enables and starts it.
+/// Writes the user unit (unless a packaged one exists) and enables and starts it. A user
+/// unit left from a Cargo install would shadow the packaged one, so it is removed then.
 pub fn install() -> Result<String> {
     let packaged = PACKAGED.iter().any(|p| Path::new(p).exists());
     let mut written = String::new();
+    let user_unit = user_unit_path()?;
+    if packaged && user_unit.exists() {
+        fs::remove_file(&user_unit).with_context(|| format!("removing {}", user_unit.display()))?;
+        systemctl(&["daemon-reload"])?;
+        written = format!("removed {}, which shadowed the packaged unit", user_unit.display());
+    }
     if !packaged {
         let exe = std::env::current_exe().context("locating the prebake executable")?;
         let exe = exe.canonicalize().unwrap_or(exe);
@@ -56,14 +63,20 @@ pub fn install() -> Result<String> {
     Ok(written)
 }
 
-pub fn uninstall() -> Result<()> {
-    let _ = systemctl(&["disable", "--now", UNIT]);
-    let path = user_unit_path()?;
-    if path.exists() {
-        fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
-        systemctl(&["daemon-reload"])?;
+/// Stops and disables the service and removes the user unit. Returns whether a unit file
+/// was removed; a packaged unit stays until the package is removed.
+pub fn uninstall() -> Result<bool> {
+    let (_, enabled) = state();
+    if enabled != "not-found" {
+        systemctl(&["disable", "--now", UNIT])?;
     }
-    Ok(())
+    let path = user_unit_path()?;
+    if !path.exists() {
+        return Ok(false);
+    }
+    fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+    systemctl(&["daemon-reload"])?;
+    Ok(true)
 }
 
 /// `systemctl --user is-active` and `is-enabled` for the unit.

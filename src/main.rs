@@ -52,7 +52,7 @@ enum Command {
         /// Steam app ids to bake; every game when empty.
         apps: Vec<u32>,
         /// Replay workers to use.
-        #[arg(long)]
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
         workers: Option<u32>,
     },
     /// Ask the service to bake now, even while you are at the computer.
@@ -144,16 +144,19 @@ fn run(command: Command) -> Result<()> {
         }
         Command::Doctor => doctor(&dirs),
         Command::Install => {
-            let written = service::install()?;
-            if !written.is_empty() {
-                println!("{written}");
+            let note = service::install()?;
+            if !note.is_empty() {
+                println!("{note}");
             }
             println!("prebake.service is enabled and running");
             Ok(())
         }
         Command::Uninstall => {
-            service::uninstall()?;
-            println!("prebake.service is stopped and removed");
+            if service::uninstall()? {
+                println!("prebake.service is stopped and removed");
+            } else {
+                println!("prebake.service is stopped and disabled; the packaged unit stays until the package is removed");
+            }
             Ok(())
         }
         Command::Steam { background, threads } => configure_steam(&dirs, background, threads),
