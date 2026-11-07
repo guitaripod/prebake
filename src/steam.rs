@@ -38,7 +38,7 @@ impl Steam {
                 if !is_steam_root(path) {
                     bail!("{} is not a Steam installation (no steamapps/ or ubuntu12_64/)", path.display());
                 }
-                path.to_path_buf()
+                path.canonicalize().with_context(|| format!("resolving {}", path.display()))?
             }
             None => find_root()
                 .context("no native Steam installation found in ~/.local/share/Steam or ~/.steam/steam (set steam_root in the config)")?,
