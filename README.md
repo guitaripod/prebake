@@ -100,15 +100,18 @@ workers_away = 0           # 0 = one per CPU thread minus one, within memory
 workers_present = 0        # 0 = wait until you leave
 respect_inhibitors = false # true: apps that keep the screen awake (music, video, calls) count as you being present
 run_on_battery = false
+idle_hint = false          # true: set logind's idle hint while you are away and no game runs (see below)
 pipeline_timeout = 60      # seconds one pipeline may take before Fossilize skips it
 exclude = []               # Steam app ids to leave alone
 # steam_root = "/home/you/.local/share/Steam"
 # device_index = 0         # Vulkan device; default is the first discrete GPU
 ```
 
+`idle_hint` is for desktops that never set logind's idle hint, such as KDE Plasma: other background tools that wait for an idle session, like SCSKiller's "When idle" compiles, then wait until you are away and pause the moment you are back or a game starts. For them an app that keeps the screen awake (a film, a call, a game's window) also counts as you being present, until three hours pass without input (compositors without ext-idle-notify v2 keep it present for as long as the app does). Leave it off on GNOME, which sets the hint itself. logind's own `IdleAction` acts on the hint too, so leave it off if you set one in `logind.conf`. `prebake doctor` shows the session it goes to.
+
 ## What it touches
 
-Only the files Steam's own replay touches, in each game's `steamapps/shadercache/<appid>`: the driver cache (`nvidiav1/`, `mesa_shader_cache_sf/`, `AMDv1/`) and Fossilize's `replay_cache.*.foz` and `steam_pipeline_cache_whitelist*.foz`. Merges write a new file and rename it into place. prebake's own state lives in `~/.local/state/prebake`.
+Only the files Steam's own replay touches, in each game's `steamapps/shadercache/<appid>`: the driver cache (`nvidiav1/`, `mesa_shader_cache_sf/`, `AMDv1/`) and Fossilize's `replay_cache.*.foz` and `steam_pipeline_cache_whitelist*.foz`. Merges write a new file and rename it into place. prebake's own state lives in `~/.local/state/prebake`. With `idle_hint` on it also sets logind's idle hint on your graphical session, and hands it back as present when it stops.
 
 ## Requirements and limits
 

@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::foz;
 use crate::gpu::{self, Device};
+use crate::idlehint::{IdleHint, SystemLogind};
 use crate::plan::{self, AppPlan, Group, Pending};
 use crate::presence::{self, Presence};
 use crate::procs::{self, Snapshot};
@@ -84,6 +85,7 @@ pub struct Daemon {
     mode: Mode,
     steam: Steam,
     presence: Arc<Presence>,
+    idle_hint: Option<IdleHint<SystemLogind>>,
     records: Records,
     plans: Vec<AppPlan>,
     planned_at: Option<Instant>,
@@ -104,7 +106,7 @@ pub struct Daemon {
 }
 
 impl Daemon {
-    pub fn new(config: Config, dirs: Dirs, mode: Mode) -> Result<Self> {
+    pub fn new(config: Config, dirs: Dirs, mode: Mode, idle_hint: Option<IdleHint<SystemLogind>>) -> Result<Self> {
         if crate::steam::flatpak_only() && config.steam_root.is_none() {
             bail!("only a Flatpak Steam was found; prebake drives a native Steam installation");
         }
@@ -124,6 +126,7 @@ impl Daemon {
             mode,
             steam,
             presence,
+            idle_hint,
             records,
             plans: Vec::new(),
             planned_at: None,
@@ -178,6 +181,7 @@ impl Daemon {
     }
 
     fn shutdown(&mut self) {
+        self.idle_hint = None;
         if let Some(job) = self.job.take() {
             let group = job.group.clone();
             match job.stop() {
@@ -195,6 +199,11 @@ impl Daemon {
     fn tick(&mut self) -> Result<()> {
         let now_s = now();
         self.snapshot = procs::scan(&self.steam.root, self.job.as_ref().map(Job::pid));
+        let game_running = !self.snapshot.games.is_empty() || self.presence.gamemode_games() > 0;
+        let away = self.presence.away();
+        if let Some(hint) = &mut self.idle_hint {
+            hint.publish(self.presence.away_for_others() && !game_running, Instant::now());
+        }
         self.refresh_device()?;
         self.refresh_plan()?;
         let Some(device) = self.device.clone() else {
@@ -210,9 +219,9 @@ impl Daemon {
         let inputs = Inputs {
             paused: control.paused(now_s) && matches!(self.mode, Mode::Service),
             boosted: control.boosted(now_s) || matches!(self.mode, Mode::Once { .. }),
-            game_running: !self.snapshot.games.is_empty() || self.presence.gamemode_games() > 0,
+            game_running,
             on_battery: presence::on_battery(),
-            away: self.presence.away(),
+            away,
         };
         let away_workers = match self.mode {
             Mode::Once { workers: Some(n), .. } => n,

@@ -22,6 +22,12 @@ pub struct Config {
     pub respect_inhibitors: bool,
     /// Keep baking on battery power.
     pub run_on_battery: bool,
+    /// Tell logind your session is idle while you are away and no game runs, so tools that
+    /// wait for an idle session (SCSKiller's "When idle", logind's `IdleAction`) wait for you
+    /// too on desktops that never set logind's idle hint, such as KDE Plasma. For them an app
+    /// keeping the screen awake (a film, a call) counts as you being present, for up to three
+    /// hours without input.
+    pub idle_hint: bool,
     /// Steam installation to use instead of the one found automatically.
     pub steam_root: Option<PathBuf>,
     /// Vulkan device index to replay on instead of the first discrete GPU.
@@ -40,6 +46,7 @@ impl Default for Config {
             workers_present: 0,
             respect_inhibitors: false,
             run_on_battery: false,
+            idle_hint: false,
             steam_root: None,
             device_index: None,
             pipeline_timeout: 60,
@@ -130,6 +137,9 @@ respect_inhibitors = false
 
 # Keep baking on battery power.
 run_on_battery = false
+
+# Tell logind the session is idle while you are away and no game runs, for other tools that wait for an idle session.
+idle_hint = false
 
 # Seconds one pipeline may take before Fossilize skips it.
 pipeline_timeout = 60

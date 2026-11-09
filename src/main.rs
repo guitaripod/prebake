@@ -2,6 +2,7 @@ mod config;
 mod daemon;
 mod foz;
 mod gpu;
+mod idlehint;
 mod plan;
 mod presence;
 mod procs;
@@ -232,7 +233,7 @@ fn foreground(dirs: &Dirs, apps: Vec<u32>, workers: Option<u32>) -> Result<()> {
     init_logging();
     let config = load_config(dirs)?;
     let stop = stop_on_signals()?;
-    let mut daemon = Daemon::new(config, dirs.clone(), Mode::Once { apps, workers })?;
+    let mut daemon = Daemon::new(config, dirs.clone(), Mode::Once { apps, workers }, None)?;
     daemon.run(&stop)
 }
 
@@ -241,11 +242,25 @@ fn service_main(dirs: &Dirs) -> Result<()> {
     let config = load_config(dirs)?;
     let stop = stop_on_signals()?;
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "prebake service starting");
+    let idle_hint = if config.idle_hint {
+        Some(present_idle_hint(dirs))
+    } else {
+        idlehint::clear_left_over(&dirs.idle_hint());
+        None
+    };
     let Some(_lock) = wait_for_lock(dirs, &stop)? else {
         return Ok(());
     };
-    let mut daemon = Daemon::new(config, dirs.clone(), Mode::Service)?;
+    let mut daemon = Daemon::new(config, dirs.clone(), Mode::Service, idle_hint)?;
     daemon.run(&stop)
+}
+
+/// Starts the idle hint as present before anything that can wait or fail, so a hint a killed
+/// prebake left at idle never outlives the restart.
+fn present_idle_hint(dirs: &Dirs) -> idlehint::IdleHint<idlehint::SystemLogind> {
+    let mut hint = idlehint::IdleHint::system(dirs.idle_hint());
+    hint.publish(false, std::time::Instant::now());
+    hint
 }
 
 /// Waits while a `prebake run` holds the baking lock, so the service never replays next to it.
@@ -401,6 +416,12 @@ fn doctor(dirs: &Dirs) -> Result<()> {
             "idle",
             "no idle source in this session; prebake will only bake while the screen is locked".into(),
         ),
+    }
+    if config.idle_hint {
+        match idlehint::describe() {
+            Ok(text) => ok("idle hint", text),
+            Err(err) => warn("idle hint", format!("{err:#}")),
+        }
     }
     if presence::gamemode_available() {
         ok("gamemode", "GameMode answers; games it knows about pause baking too".into());

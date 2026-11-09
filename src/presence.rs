@@ -12,11 +12,14 @@ use x11rb::protocol::screensaver::ConnectionExt as _;
 
 const POLL: Duration = Duration::from_secs(3);
 const RETRY: Duration = Duration::from_secs(15);
+const LONG_IDLE: Duration = Duration::from_secs(3 * 60 * 60);
 
 /// What prebake knows about the person at the computer, updated by background threads.
 #[derive(Debug, Default)]
 pub struct Presence {
     idle: AtomicBool,
+    screen_idle: AtomicBool,
+    long_idle: AtomicBool,
     locked: AtomicBool,
     games: AtomicU32,
     source: Mutex<String>,
@@ -25,6 +28,22 @@ pub struct Presence {
 impl Presence {
     pub fn away(&self) -> bool {
         self.idle.load(Ordering::Relaxed) || self.locked.load(Ordering::Relaxed)
+    }
+
+    /// Away as other tools hear it through logind's idle hint: an app keeping the screen awake
+    /// (a film, a call, a game's window) counts as present too, for up to [`LONG_IDLE`]
+    /// without input so a forgotten video cannot hold everything off overnight. Compositors
+    /// without ext-idle-notify v2 cannot tell input apart, so there the cap never comes.
+    pub fn away_for_others(&self) -> bool {
+        self.locked.load(Ordering::Relaxed)
+            || self.long_idle.load(Ordering::Relaxed)
+            || self.idle.load(Ordering::Relaxed) && self.screen_idle.load(Ordering::Relaxed)
+    }
+
+    fn set_idle(&self, idle: bool, screen_idle: bool, long_idle: bool) {
+        self.idle.store(idle, Ordering::Relaxed);
+        self.screen_idle.store(screen_idle, Ordering::Relaxed);
+        self.long_idle.store(long_idle, Ordering::Relaxed);
     }
 
     pub fn locked(&self) -> bool {
@@ -73,7 +92,7 @@ fn watch_idle(presence: Arc<Presence>, idle_after: Duration, respect_inhibitors:
                 Ok(never) => match never {},
                 Err(WaylandError::Unsupported) => {}
                 Err(WaylandError::Lost(err)) => {
-                    presence.idle.store(false, Ordering::Relaxed);
+                    presence.set_idle(false, false, false);
                     tracing::warn!("Wayland idle watcher stopped: {err:#}; retrying");
                     std::thread::sleep(RETRY);
                     continue;
@@ -86,7 +105,7 @@ fn watch_idle(presence: Arc<Presence>, idle_after: Duration, respect_inhibitors:
         if x11_session() && poll_idle(&presence, idle_after, respect_inhibitors, "X11 screensaver", x11_idle_ms).is_some() {
             continue;
         }
-        presence.idle.store(false, Ordering::Relaxed);
+        presence.set_idle(false, false, false);
         presence.set_source("screen lock only");
         std::thread::sleep(RETRY * 4);
     }
@@ -98,11 +117,13 @@ fn poll_idle(presence: &Presence, idle_after: Duration, respect_inhibitors: bool
     read().ok()?;
     presence.set_source(name);
     while let Ok(ms) = read() {
-        let idle = Duration::from_millis(ms) >= idle_after && !(respect_inhibitors && session_inhibited());
-        presence.idle.store(idle, Ordering::Relaxed);
+        let quiet = Duration::from_millis(ms);
+        let past = quiet >= idle_after;
+        let screen_idle = past && !session_inhibited();
+        presence.set_idle(past && (screen_idle || !respect_inhibitors), screen_idle, quiet >= LONG_IDLE);
         std::thread::sleep(POLL);
     }
-    presence.idle.store(false, Ordering::Relaxed);
+    presence.set_idle(false, false, false);
     Some(())
 }
 
@@ -157,18 +178,34 @@ struct WaylandState {
     presence: Arc<Presence>,
 }
 
+/// Which of the three idle notifications an event belongs to.
+#[derive(Clone, Copy, Debug)]
+enum Watch {
+    Away,
+    Screen,
+    Long,
+}
+
 fn run_wayland(presence: &Arc<Presence>, timeout_ms: u32, respect_inhibitors: bool) -> Result<std::convert::Infallible, WaylandError> {
     let conn = Connection::connect_to_env().map_err(|_| WaylandError::Unsupported)?;
     let (globals, mut queue) = registry_queue_init::<WaylandState>(&conn).map_err(|e| WaylandError::Lost(e.into()))?;
     let qh = queue.handle();
     let notifier: ExtIdleNotifierV1 = globals.bind(&qh, 1..=2, ()).map_err(|_| WaylandError::Unsupported)?;
     let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=1, ()).map_err(|e| WaylandError::Lost(e.into()))?;
-    let _notification = if !respect_inhibitors && notifier.version() >= 2 {
-        notifier.get_input_idle_notification(timeout_ms, &seat, &qh, ())
+    let input_only = notifier.version() >= 2;
+    let _away = if !respect_inhibitors && input_only {
+        notifier.get_input_idle_notification(timeout_ms, &seat, &qh, Watch::Away)
     } else {
-        notifier.get_idle_notification(timeout_ms, &seat, &qh, ())
+        notifier.get_idle_notification(timeout_ms, &seat, &qh, Watch::Away)
     };
-    presence.idle.store(false, Ordering::Relaxed);
+    let _screen = notifier.get_idle_notification(timeout_ms, &seat, &qh, Watch::Screen);
+    let long_ms = u32::try_from(LONG_IDLE.as_millis()).unwrap_or(u32::MAX);
+    let _long = if input_only {
+        notifier.get_input_idle_notification(long_ms, &seat, &qh, Watch::Long)
+    } else {
+        notifier.get_idle_notification(long_ms, &seat, &qh, Watch::Long)
+    };
+    presence.set_idle(false, false, false);
     presence.set_source(if !respect_inhibitors && notifier.version() >= 2 {
         "Wayland ext-idle-notify, input only"
     } else {
@@ -202,20 +239,27 @@ impl Dispatch<ExtIdleNotifierV1, ()> for WaylandState {
     fn event(_: &mut Self, _: &ExtIdleNotifierV1, _: <ExtIdleNotifierV1 as Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
 }
 
-impl Dispatch<ExtIdleNotificationV1, ()> for WaylandState {
+impl Dispatch<ExtIdleNotificationV1, Watch> for WaylandState {
     fn event(
         state: &mut Self,
         _: &ExtIdleNotificationV1,
         event: ext_idle_notification_v1::Event,
-        _: &(),
+        watch: &Watch,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        match event {
-            ext_idle_notification_v1::Event::Idled => state.presence.idle.store(true, Ordering::Relaxed),
-            ext_idle_notification_v1::Event::Resumed => state.presence.idle.store(false, Ordering::Relaxed),
-            _ => {}
-        }
+        let idle = match event {
+            ext_idle_notification_v1::Event::Idled => true,
+            ext_idle_notification_v1::Event::Resumed => false,
+            _ => return,
+        };
+        let flag = match watch {
+            Watch::Away => &state.presence.idle,
+            Watch::Screen => &state.presence.screen_idle,
+            Watch::Long => &state.presence.long_idle,
+        };
+        flag.store(idle, Ordering::Relaxed);
+        tracing::debug!(?watch, idle, "idle notification");
     }
 }
 
@@ -380,4 +424,36 @@ pub fn on_battery() -> bool {
         }
     }
     battery
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn presence(idle: bool, screen_idle: bool, long_idle: bool, locked: bool) -> Presence {
+        let presence = Presence::default();
+        presence.set_idle(idle, screen_idle, long_idle);
+        presence.locked.store(locked, Ordering::Relaxed);
+        presence
+    }
+
+    #[test]
+    fn a_screen_kept_awake_counts_as_present_for_others_only() {
+        let watching = presence(true, false, false, false);
+        assert!(watching.away());
+        assert!(!watching.away_for_others());
+    }
+
+    #[test]
+    fn hours_without_input_count_as_away_even_with_the_screen_awake() {
+        assert!(presence(true, false, true, false).away_for_others());
+        assert!(presence(false, false, true, false).away_for_others());
+    }
+
+    #[test]
+    fn input_or_a_lock_decide_for_others_too() {
+        assert!(presence(true, true, false, false).away_for_others());
+        assert!(!presence(false, true, false, false).away_for_others());
+        assert!(presence(false, false, false, true).away_for_others());
+    }
 }

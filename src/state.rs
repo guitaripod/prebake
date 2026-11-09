@@ -41,6 +41,11 @@ impl Dirs {
         self.runtime.join("status.json")
     }
 
+    /// Names the session whose logind idle hint prebake may have left at idle.
+    pub fn idle_hint(&self) -> PathBuf {
+        self.runtime.join("idle-hint")
+    }
+
     pub fn control(&self) -> PathBuf {
         self.state.join("control.json")
     }

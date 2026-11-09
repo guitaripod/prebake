@@ -4,6 +4,9 @@ All notable changes to prebake are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Added
+- `idle_hint = true` sets logind's idle hint on your graphical session while you are away and no game runs, and hands it back as present when you return or prebake stops, so other tools that wait for an idle session (SCSKiller's "When idle" compiles) wait for you on desktops that never set the hint, such as KDE Plasma. For them an app keeping the screen awake (a film, a call) counts as present for up to three hours without input. `prebake doctor` shows the session it goes to.
+
 ## [0.1.0] - 2026-11-07
 
 ### Added
