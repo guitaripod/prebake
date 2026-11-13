@@ -44,6 +44,30 @@ pub fn scan(steam_root: &Path, own_group: Option<i32>) -> Snapshot {
     snapshot
 }
 
+/// Resident anonymous and shared memory of every process in a process group: what a replay
+/// holds that would come back if it stopped.
+pub fn group_memory(pgid: i32) -> u64 {
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.file_name().to_str().is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit())))
+        .filter(|entry| process_group(&entry.path()) == Some(pgid))
+        .filter_map(|entry| fs::read_to_string(entry.path().join("status")).ok())
+        .map(|status| status_kib(&status, "RssAnon:") + status_kib(&status, "RssShmem:"))
+        .sum::<u64>()
+        * 1024
+}
+
+fn status_kib(status: &str, field: &str) -> u64 {
+    status
+        .lines()
+        .find_map(|l| l.strip_prefix(field))
+        .and_then(|v| v.trim().trim_end_matches("kB").trim().parse().ok())
+        .unwrap_or(0)
+}
+
 fn read_cmdline(dir: &Path) -> Vec<String> {
     fs::read(dir.join("cmdline"))
         .map(|bytes| {
@@ -122,6 +146,14 @@ mod tests {
                 PathBuf::from("/c/2322010/fozpipelinesv6/steamapprun_pipeline_cache.35")
             ]
         );
+    }
+
+    #[test]
+    fn measures_the_memory_of_its_own_process_group() {
+        let own = process_group(Path::new("/proc/self")).unwrap();
+        assert!(group_memory(own) > 0);
+        assert_eq!(group_memory(i32::MAX), 0);
+        assert_eq!(status_kib("Name:\tx\nRssAnon:\t  2048 kB\n", "RssAnon:"), 2048);
     }
 
     #[test]

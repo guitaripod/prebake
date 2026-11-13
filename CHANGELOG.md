@@ -7,6 +7,9 @@ All notable changes to prebake are listed here. The format follows [Keep a Chang
 ### Added
 - `idle_hint = true` sets logind's idle hint on your graphical session while you are away and no game runs, and hands it back as present when you return or prebake stops, so other tools that wait for an idle session (SCSKiller's "When idle" compiles) wait for you on desktops that never set the hint, such as KDE Plasma. For them an app keeping the screen awake (a film, a call) counts as present for up to three hours without input. `prebake doctor` shows the session it goes to.
 
+### Changed
+- Replays fit in memory instead of finding out by pushing the desktop into swap: each worker is first assumed to need 1 GiB (Diablo IV measures about 1.2 GiB per worker on NVIDIA, where the old 400 MiB guess let 27 workers take 32 GiB and fill swap), the running replay's real memory replaces the estimate as it grows, an eighth of RAM (at least 4 GiB) stays free for the desktop, and the worker count stays inside the service's own memory limit.
+
 ## [0.1.0] - 2026-11-07
 
 ### Added

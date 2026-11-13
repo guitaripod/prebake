@@ -80,9 +80,53 @@ fn total_memory_bytes() -> u64 {
     meminfo("MemTotal:").unwrap_or(8 << 30)
 }
 
-/// Bytes the kernel reports as available to new work.
-pub fn available_memory_bytes() -> Option<u64> {
-    meminfo("MemAvailable:")
+/// Memory a replay worker is assumed to need until a running replay shows what it takes.
+/// Large games measure about 1.2 GiB per worker (Diablo IV on NVIDIA).
+pub const WORKER_MEMORY: u64 = 1 << 30;
+const MIN_RESERVE: u64 = 4 << 30;
+
+/// What a replay may use: the memory the kernel can hand out minus a reserve for the desktop,
+/// and no more than the limit on prebake's own cgroup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemoryBudget {
+    pub available: Option<u64>,
+    pub reserve: u64,
+    pub ceiling: Option<u64>,
+}
+
+impl MemoryBudget {
+    pub fn read() -> Self {
+        Self {
+            available: meminfo("MemAvailable:"),
+            reserve: (total_memory_bytes() / 8).max(MIN_RESERVE),
+            ceiling: cgroup_ceiling(),
+        }
+    }
+
+    /// How many workers fit. `held` is memory the running replay already uses, which would come
+    /// back if it were restarted; `per_worker` is what one worker needs. A tenth of the cgroup
+    /// limit stays free for the databases Fossilize reads and for prebake itself.
+    pub fn workers(&self, held: u64, per_worker: u64) -> u32 {
+        let free = self.available.map(|available| (available + held).saturating_sub(self.reserve));
+        let limited = self.ceiling.map(|ceiling| ceiling - ceiling / 10);
+        let budget = match (free, limited) {
+            (Some(free), Some(limited)) => free.min(limited),
+            (Some(budget), None) | (None, Some(budget)) => budget,
+            (None, None) => return u32::MAX,
+        };
+        (budget / per_worker.max(1)).clamp(1, u64::from(u32::MAX)) as u32
+    }
+}
+
+/// The lower of `memory.high` and `memory.max` on prebake's own cgroup, when either is set.
+fn cgroup_ceiling() -> Option<u64> {
+    let membership = std::fs::read_to_string("/proc/self/cgroup").ok()?;
+    let path = membership.lines().find_map(|l| l.strip_prefix("0::"))?;
+    let dir = Path::new("/sys/fs/cgroup").join(path.trim_start_matches('/'));
+    ["memory.high", "memory.max"]
+        .iter()
+        .filter_map(|file| std::fs::read_to_string(dir.join(file)).ok()?.trim().parse::<u64>().ok())
+        .min()
 }
 
 fn meminfo(field: &str) -> Option<u64> {
@@ -92,19 +136,6 @@ fn meminfo(field: &str) -> Option<u64> {
             .and_then(|v| v.trim().trim_end_matches("kB").trim().parse::<u64>().ok())
             .map(|kib| kib * 1024)
     })
-}
-
-/// Memory a replay worker is assumed to need, driver included.
-pub const WORKER_MEMORY: u64 = 400 << 20;
-const MEMORY_RESERVE: u64 = 4 << 30;
-
-/// How many workers fit in memory while keeping a reserve for the desktop. `held` is memory
-/// the running replay already uses, which would come back if it were restarted.
-pub fn memory_cap(available: Option<u64>, held: u64) -> u32 {
-    match available {
-        Some(available) => ((available + held).saturating_sub(MEMORY_RESERVE) / WORKER_MEMORY).clamp(1, u64::from(u32::MAX)) as u32,
-        None => u32::MAX,
-    }
 }
 
 mod humantime_serde_compat {
@@ -171,11 +202,32 @@ mod tests {
     }
 
     #[test]
-    fn memory_cap_keeps_a_reserve_and_counts_memory_the_replay_holds() {
-        assert_eq!(memory_cap(None, 0), u32::MAX);
-        assert_eq!(memory_cap(Some(2 << 30), 0), 1);
-        assert_eq!(memory_cap(Some((4 << 30) + 10 * WORKER_MEMORY), 0), 10);
-        assert_eq!(memory_cap(Some(4 << 30), 10 * WORKER_MEMORY), 10);
+    fn memory_budget_keeps_a_reserve_and_counts_memory_the_replay_holds() {
+        let gib = 1u64 << 30;
+        let budget = |available, ceiling| MemoryBudget {
+            available,
+            reserve: 4 * gib,
+            ceiling,
+        };
+        assert_eq!(budget(None, None).workers(0, gib), u32::MAX);
+        assert_eq!(budget(Some(2 * gib), None).workers(0, gib), 1);
+        assert_eq!(budget(Some(14 * gib), None).workers(0, gib), 10);
+        assert_eq!(budget(Some(4 * gib), None).workers(10 * gib, gib), 10);
+        assert_eq!(budget(Some(4 * gib), None).workers(10 * gib, 2 * gib), 5);
+    }
+
+    #[test]
+    fn memory_budget_stays_inside_the_cgroup_limit() {
+        let gib = 1u64 << 30;
+        let budget = MemoryBudget {
+            available: Some(64 * gib),
+            reserve: 4 * gib,
+            ceiling: Some(20 * gib),
+        };
+        assert_eq!(budget.workers(0, gib), 18);
+        let unknown = MemoryBudget { available: None, ..budget };
+        assert_eq!(unknown.workers(0, 2 * gib), 9);
+        assert!(MemoryBudget::read().reserve >= MIN_RESERVE);
     }
 
     #[test]

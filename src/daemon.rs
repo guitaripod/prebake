@@ -103,6 +103,7 @@ pub struct Daemon {
     reason: String,
     last_error: Option<String>,
     deferred: BTreeSet<PathBuf>,
+    worker_memory: u64,
 }
 
 impl Daemon {
@@ -144,6 +145,7 @@ impl Daemon {
             reason: String::new(),
             last_error: None,
             deferred: BTreeSet::new(),
+            worker_memory: crate::config::WORKER_MEMORY,
         })
     }
 
@@ -244,8 +246,9 @@ impl Daemon {
             Decision::Run { workers, reason } => {
                 self.frozen_since = None;
                 self.reason = reason.into();
-                let held = self.job.as_ref().map_or(0, |j| u64::from(j.workers) * crate::config::WORKER_MEMORY);
-                let workers = workers.min(crate::config::memory_cap(crate::config::available_memory_bytes(), held));
+                let held = self.job.as_ref().map_or(0, |j| crate::procs::group_memory(j.pid()));
+                let per_worker = self.worker_memory(held);
+                let workers = workers.min(crate::config::MemoryBudget::read().workers(held, per_worker));
                 self.steer(workers, &device, now_s)?;
                 if self.job.is_some() {
                     self.scan_some(&device.uuid);
@@ -253,6 +256,16 @@ impl Daemon {
             }
         }
         Ok(())
+    }
+
+    /// What one replay worker needs: the most any replay has used per worker since prebake
+    /// started, and never less than the starting estimate, so the next replay starts within
+    /// memory instead of finding out by pushing the desktop into swap.
+    fn worker_memory(&mut self, held: u64) -> u64 {
+        if let Some(job) = &self.job {
+            self.worker_memory = self.worker_memory.max(held / u64::from(job.workers.max(1)));
+        }
+        self.worker_memory
     }
 
     /// Counts the shaders still missing for a few unscanned groups while a replay keeps the
