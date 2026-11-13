@@ -32,6 +32,7 @@ Cyberpunk 2077                            waiting        12,191
   - Steam starts its own replay for a game: prebake leaves that game to Steam.
   - On battery, or `prebake pause`: nothing runs.
   - Workers run at nice 19, `SCHED_BATCH` and idle I/O priority, like Steam's own.
+  - Memory: workers are counted against what the running replay really holds, so a heavy game runs fewer of them, and the service is capped at 35% of RAM with no swap, so a replay never pushes your desktop into swap.
 - **Starts over when it should.** A driver update changes the cache key, and a new shader download changes the databases; either way the affected games are baked again.
 
 Idle time comes from the Wayland `ext-idle-notify-v1` protocol (KDE Plasma, Hyprland, sway, niri, COSMIC and other wlroots or Smithay compositors), from Mutter's IdleMonitor on GNOME, or from the X11 screensaver extension.

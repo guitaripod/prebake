@@ -9,6 +9,7 @@ All notable changes to prebake are listed here. The format follows [Keep a Chang
 
 ### Changed
 - Replays fit in memory instead of finding out by pushing the desktop into swap: each worker is first assumed to need 1 GiB (Diablo IV measures about 1.2 GiB per worker on NVIDIA, where the old 400 MiB guess let 27 workers take 32 GiB and fill swap), the running replay's real memory replaces the estimate as it grows, an eighth of RAM (at least 4 GiB) stays free for the desktop, and the worker count stays inside the service's own memory limit.
+- The service unit caps prebake at 35% of RAM with no swap (`MemoryMax=35%`, `MemorySwapMax=0`) and keeps running when the kernel ends a worker at that limit (`OOMPolicy=continue`); Fossilize replaces the worker. Run `prebake install` again to update a unit written by an earlier version.
 
 ## [0.1.0] - 2026-11-07
 

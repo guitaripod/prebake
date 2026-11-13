@@ -11,6 +11,9 @@ Restart=on-failure
 RestartSec=30
 KillMode=mixed
 TimeoutStopSec=20
+MemoryMax=35%
+MemorySwapMax=0
+OOMPolicy=continue
 
 [Install]
 WantedBy=graphical-session.target

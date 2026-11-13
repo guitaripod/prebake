@@ -10,7 +10,9 @@ const PACKAGED: [&str; 2] = [
 ];
 
 /// The systemd user unit prebake runs as. `KillMode=mixed` lets the daemon stop the replay
-/// itself on shutdown, so Fossilize gets to kill its own workers.
+/// itself on shutdown, so Fossilize gets to kill its own workers. The memory limit and no swap
+/// keep a replay from pushing the desktop into swap; at the limit the kernel ends a worker,
+/// which Fossilize replaces, and `OOMPolicy=continue` keeps the service running through it.
 pub fn unit_text(exe: &Path) -> String {
     format!(
         "[Unit]\n\
@@ -26,6 +28,9 @@ Restart=on-failure\n\
 RestartSec=30\n\
 KillMode=mixed\n\
 TimeoutStopSec=20\n\
+MemoryMax=35%\n\
+MemorySwapMax=0\n\
+OOMPolicy=continue\n\
 \n\
 [Install]\n\
 WantedBy=graphical-session.target\n",
