@@ -5,6 +5,7 @@ All notable changes to prebake are listed here. The format follows [Keep a Chang
 ## [Unreleased]
 
 ### Added
+- `cpu_limit` caps the bake at that many cores' worth of CPU. The service sets it on itself as a CPU quota at every start (and clears it when you drop the setting), so a full bake over a big library no longer heats the CPU into loud fans. It also caps the worker count, since each worker is a busy thread; `prebake doctor` reports it.
 - `idle_hint = true` sets logind's idle hint on your graphical session while you are away and no game runs, and hands it back as present when you return or prebake stops, so other tools that wait for an idle session (SCSKiller's "When idle" compiles) wait for you on desktops that never set the hint, such as KDE Plasma. For them an app keeping the screen awake (a film, a call) counts as present for up to three hours without input. `prebake doctor` shows the session it goes to.
 
 ### Changed

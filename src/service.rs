@@ -38,6 +38,20 @@ WantedBy=graphical-session.target\n",
     )
 }
 
+/// Sets the CPU quota the config asks for on the running service, and clears it when the config
+/// has no limit, so the limit lives in `config.toml` instead of a hand-written drop-in. The
+/// property is runtime only: a restart drops it and the next start sets it again.
+pub fn apply_cpu_quota(percent: Option<u32>) -> Result<()> {
+    systemctl(&["set-property", UNIT, &cpu_quota_argument(percent)])
+}
+
+fn cpu_quota_argument(percent: Option<u32>) -> String {
+    match percent {
+        Some(percent) => format!("CPUQuota={percent}%"),
+        None => "CPUQuota=".into(),
+    }
+}
+
 fn user_unit_path() -> Result<PathBuf> {
     let base = directories::BaseDirs::new().context("finding the home directory")?;
     Ok(base.config_dir().join("systemd/user").join(UNIT))
@@ -125,5 +139,15 @@ mod tests {
     fn the_packaged_unit_matches_the_generated_one() {
         let packaged = include_str!("../packaging/prebake.service");
         assert_eq!(packaged, unit_text(Path::new("/usr/bin/prebake")));
+    }
+
+    #[test]
+    fn the_cpu_limit_is_a_quota_the_runtime_can_clear() {
+        assert_eq!(
+            cpu_quota_argument(Some(300)),
+            "CPUQuota=300%",
+            "cores become a percent of one core"
+        );
+        assert_eq!(cpu_quota_argument(None), "CPUQuota=", "no limit clears the quota");
     }
 }

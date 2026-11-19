@@ -32,6 +32,7 @@ Cyberpunk 2077                            waiting        12,191
   - Steam starts its own replay for a game: prebake leaves that game to Steam.
   - On battery, or `prebake pause`: nothing runs.
   - Workers run at nice 19, `SCHED_BATCH` and idle I/O priority, like Steam's own.
+  - `cpu_limit` caps how much CPU the whole bake may use, as a quota on the service, so a full bake never heats the machine into loud fans.
   - Memory: workers are counted against what the running replay really holds, so a heavy game runs fewer of them, and the service is capped at 35% of RAM with no swap, so a replay never pushes your desktop into swap.
 - **Starts over when it should.** A driver update changes the cache key, and a new shader download changes the databases; either way the affected games are baked again.
 
@@ -99,6 +100,7 @@ Logs: `journalctl --user -u prebake`. `PREBAKE_LOG=debug` adds per-pipeline cras
 idle_after = "5m"          # no input for this long counts as away
 workers_away = 0           # 0 = one per CPU thread minus one, within memory
 workers_present = 0        # 0 = wait until you leave
+cpu_limit = 0              # cores' worth of CPU the bake may use, as a quota on the service; 0 = no limit
 respect_inhibitors = false # true: apps that keep the screen awake (music, video, calls) count as you being present
 run_on_battery = false
 idle_hint = false          # true: set logind's idle hint while you are away and no game runs (see below)

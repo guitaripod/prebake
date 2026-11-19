@@ -14,6 +14,9 @@ pub struct Config {
     pub workers_away: u32,
     /// Replay workers while you are at the computer. 0 pauses until you leave.
     pub workers_present: u32,
+    /// Cores worth of CPU the whole bake may use, set as a quota on the service. 0 leaves it
+    /// unlimited. Also caps the workers to that many, since each one is a busy thread.
+    pub cpu_limit: u32,
     /// Count apps that keep the screen awake (a browser playing music or video, a call) as you
     /// being present. Off by default: away means no keyboard or mouse input, and a tab left
     /// playing would otherwise hold baking off for hours. Needs a compositor with
@@ -44,6 +47,7 @@ impl Default for Config {
             idle_after: Duration::from_secs(5 * 60),
             workers_away: 0,
             workers_present: 0,
+            cpu_limit: 0,
             respect_inhibitors: false,
             run_on_battery: false,
             idle_hint: false,
@@ -65,14 +69,25 @@ impl Config {
     }
 
     /// Workers to use while away: the configured count, or one per CPU thread minus one,
-    /// capped at one per 2 GiB of RAM so a big replay cannot push the desktop into swap.
+    /// capped at one per 2 GiB of RAM so a big replay cannot push the desktop into swap, and
+    /// never more than `cpu_limit`.
     pub fn away_workers(&self) -> u32 {
-        if self.workers_away > 0 {
-            return self.workers_away;
+        let workers = if self.workers_away > 0 {
+            self.workers_away
+        } else {
+            let cpus = std::thread::available_parallelism().map_or(2, |n| n.get() as u32);
+            let by_memory = (total_memory_bytes() / (2 << 30)) as u32;
+            cpus.saturating_sub(1).min(by_memory).max(1)
+        };
+        match self.cpu_limit {
+            0 => workers,
+            cores => workers.min(cores).max(1),
         }
-        let cpus = std::thread::available_parallelism().map_or(2, |n| n.get() as u32);
-        let by_memory = (total_memory_bytes() / (2 << 30)) as u32;
-        cpus.saturating_sub(1).min(by_memory).max(1)
+    }
+
+    /// The CPU limit as systemd's percent of one core, for the quota the service runs under.
+    pub fn cpu_quota_percent(&self) -> Option<u32> {
+        (self.cpu_limit > 0).then(|| self.cpu_limit.saturating_mul(100))
     }
 }
 
@@ -163,6 +178,9 @@ workers_away = 0
 # Replay workers while you are at the computer. 0 = wait until you leave.
 workers_present = 0
 
+# Cores' worth of CPU the whole bake may use, applied as a quota on the service. 0 = no limit.
+cpu_limit = 0
+
 # Treat apps that keep the screen awake (music or video in a browser, calls) as you being present.
 respect_inhibitors = false
 
@@ -238,5 +256,30 @@ mod tests {
         };
         assert_eq!(config.away_workers(), 6);
         assert!(Config::default().away_workers() >= 1);
+    }
+
+    #[test]
+    fn cpu_limit_caps_the_workers_and_becomes_a_quota() {
+        let plain = Config::default();
+        assert_eq!(plain.cpu_quota_percent(), None);
+        let limited = Config {
+            cpu_limit: 3,
+            ..Config::default()
+        };
+        assert_eq!(limited.away_workers(), 3);
+        assert_eq!(limited.cpu_quota_percent(), Some(300));
+        let both = Config {
+            workers_away: 10,
+            cpu_limit: 2,
+            ..Config::default()
+        };
+        assert_eq!(both.away_workers(), 2);
+        let fewer_workers = Config {
+            workers_away: 2,
+            cpu_limit: 8,
+            ..Config::default()
+        };
+        assert_eq!(fewer_workers.away_workers(), 2);
+        assert_eq!(fewer_workers.cpu_quota_percent(), Some(800));
     }
 }

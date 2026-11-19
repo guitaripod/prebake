@@ -240,6 +240,9 @@ fn foreground(dirs: &Dirs, apps: Vec<u32>, workers: Option<u32>) -> Result<()> {
 fn service_main(dirs: &Dirs) -> Result<()> {
     init_logging();
     let config = load_config(dirs)?;
+    if let Err(err) = service::apply_cpu_quota(config.cpu_quota_percent()) {
+        tracing::warn!(error = %err, "could not set the CPU limit on the service; baking without it");
+    }
     let stop = stop_on_signals()?;
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "prebake service starting");
     let idle_hint = if config.idle_hint {
@@ -448,6 +451,16 @@ fn doctor(dirs: &Dirs) -> Result<()> {
         ok("service", format!("{active}, {enabled}; {}", status.reason));
     } else {
         warn("service", format!("{active}, {enabled}; install it with: prebake install"));
+    }
+    match config.cpu_limit {
+        0 => warn(
+            "cpu",
+            "no limit: baking may use every core while you are away (set cpu_limit to a core count to cap it)".into(),
+        ),
+        cores => ok(
+            "cpu",
+            format!("at most {cores} cores' worth of CPU, set on the service at every start"),
+        ),
     }
     Ok(())
 }
